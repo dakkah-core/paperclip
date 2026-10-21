@@ -1,0 +1,23 @@
+name: CityOS upstream boundary and external adapter
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Verify declared changes and adapter boundary behavior
+        run: |
+          node --test scripts/upstream/*.test.mjs extensions/cityos-adapter/adapter.test.mjs
+          node scripts/upstream/integration.mjs

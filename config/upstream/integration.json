@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "cityos.upstream-integration.v1",
+  "upstream": {
+    "repository": "https://github.com/paperclipai/paperclip",
+    "branch": "master",
+    "commit": "6dda8cc2b75e211dc62af264bfd0994f602099d1"
+  },
+  "baselineForkCommit": "3ff636bc4852dfc07fcab8ccfdb0b4fd22c1548c",
+  "ownedDirectories": [
+    "extensions/cityos-adapter",
+    "config/upstream",
+    "scripts/upstream"
+  ],
+  "publicEntries": [
+    "@cityos-core/paperclip-adapter",
+    "@cityos-core/paperclip-adapter/ui-parser"
+  ],
+  "toolchain": "package.json#engines;package.json#packageManager;.nvmrc;scripts/check-node-version-policy.mjs",
+  "consumerProvenance": "dakkah-cityos-cms/packages/engineering-paperclip-adapter-node",
+  "requiredChecks": [
+    "source-boundary",
+    "packed-loader",
+    "planning-http",
+    "execution-http",
+    "image-startup",
+    "database-restore"
+  ],
+  "changes": [
+    {
+      "id": "fork-qualification",
+      "purpose": "Add local evidence exclusion and an isolated source/adapter CI gate without modifying Paperclip core.",
+      "invariant": "External adapter behavior remains outside core; source tests do not grant installed runtime or database qualification.",
+      "paths": [
+        ".gitignore",
+        ".github/workflows/cityos-upstream.yml"
+      ],
+      "tests": [
+        "extensions/cityos-adapter/adapter.test.mjs",
+        "scripts/upstream/integration.test.mjs"
+      ]
+    },
+    {
+      "id": "node-policy-portability",
+      "purpose": "Normalize repository-relative paths before matching the existing release-runner Node exception on Windows.",
+      "invariant": "The declared Node policy is identical on Windows and POSIX; no runtime version requirement is changed.",
+      "paths": [
+        "scripts/check-node-version-policy.mjs"
+      ],
+      "tests": [
+        "scripts/upstream/node-policy-platform.test.mjs"
+      ]
+    }
+  ],
+  "nonClaims": [
+    "Local port-level tests do not qualify the actual external loader, company isolation, installed CityOS endpoints, image or database upgrade.",
+    "Execution requires separately installed planning and execution qualification; no Paperclip approval or budget grants CityOS authority."
+  ]
+}

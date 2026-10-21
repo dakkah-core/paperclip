@@ -99,3 +99,5 @@ test-results/
 
 # Opt-in CI timing artifacts
 .ci-profile/
+# CityOS local upstream/artifact qualification.
+.build/
