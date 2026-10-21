@@ -10,7 +10,7 @@ const failures = [];
 const skippedDirectories = new Set([".git", ".paperclip", "coverage", "data", "dist", "node_modules"]);
 
 function relative(filePath) {
-  return path.relative(repoRoot, filePath) || ".";
+  return (path.relative(repoRoot, filePath) || ".").split(path.sep).join("/");
 }
 
 function walk(directory, visit) {
@@ -39,7 +39,7 @@ walk(repoRoot, (filePath) => {
 const workflowRoot = path.join(repoRoot, ".github", "workflows");
 walk(workflowRoot, (filePath) => {
   if (!/\.ya?ml$/.test(filePath)) return;
-  const source = fs.readFileSync(filePath, "utf8");
+  const source = fs.readFileSync(filePath, "utf8").replaceAll("\r\n", "\n");
   const packProducer = relative(filePath) === ".github/workflows/release-verify.yml"
     ? /(?:^|\n)  runner_binaries:\n[\s\S]*?(?=\n  [a-z_]+:\n|$)/.exec(source)
     : null;
