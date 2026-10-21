@@ -13,6 +13,7 @@ export function validatePackedManifest(manifest, sourceManifest, metadata) {
   if (canonical(manifest) !== canonical({ ...sourceManifest, cityosArtifact: metadata })) throw Error('Packed adapter manifest differs from the recorded assembly');
 }
 export async function qualifyCityosAdapter(archive) {
+  if (process.versions.node.split('.')[0] !== readFileSync(join(root, '.nvmrc'), 'utf8').trim()) throw Error('Select the owning Paperclip Node major before qualification');
   archive = resolve(archive); const artifactSha256 = sha(readFileSync(archive));
   const parent = join(root, '.build/upstream'); mkdirSync(parent, { recursive: true });
   const output = mkdtempSync(join(parent, 'paperclip-loader-')), packageRoot = join(output, 'package'); mkdirSync(packageRoot);
@@ -70,9 +71,9 @@ export async function qualifyCityosAdapter(archive) {
   for (const [name, args] of [
     ['packed-boundary-behavior', ['--test', '--test-reporter=tap', testPath]],
     ['real-external-loader', [tsx, join(root, 'extensions/cityos-adapter/qualify-loader.ts'), packageRoot]],
-    ['public-client-types', [compiler, '--ignoreConfig', '--strict', '--noEmit', '--skipLibCheck', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', typeFixturePath]],
+    ['public-client-types', [compiler, '--ignoreConfig', '--strict', '--noEmit', '--skipLibCheck', '--types', 'node', '--typeRoots', join(root, 'server/node_modules/@types'), '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', typeFixturePath]],
   ]) {
-    const result = spawnSync(process.execPath, args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
+    const result = spawnSync(process.execPath, args, { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 120000, maxBuffer: 8 * 1024 * 1024 });
     const logPath = join(output, name + '.log'); writeFileSync(logPath, (result.stdout ?? '') + (result.stderr ?? ''));
     const log = readFileSync(logPath, 'utf8');
     let passed = 0, failed = 1, skipped = 1;
@@ -88,8 +89,11 @@ export async function qualifyCityosAdapter(archive) {
     checks.push({ name, exitCode: result.status, passed, failed, skipped, logPath, logSha256: sha(readFileSync(logPath)) });
   }
   const receipt = { schemaVersion: 'cityos.paperclip-adapter-loader-qualification.v1', distributionCommit: metadata.distributionCommit,
+    nodeVersion: process.version, typescriptVersion: JSON.parse(readFileSync(join(root, 'server/node_modules/typescript/package.json'), 'utf8')).version,
+    lockfile: { path: 'pnpm-lock.yaml', sha256: sha(readFileSync(join(root, 'pnpm-lock.yaml'))) },
     artifact: { path: archive, sha256: artifactSha256 }, checks, fixtureSourceSha256: sha(Buffer.from(tests)), fixtureImportMappingSha256: sha(Buffer.from(fixture)), typeFixtureSha256: sha(typeFixture),
-    success: checks.every(check => check.exitCode === 0 && check.passed > 0 && check.failed === 0 && check.skipped === 0) && artifactSha256 === sha(readFileSync(archive)),
+    success: checks.every(check => check.exitCode === 0 && check.passed > 0 && check.failed === 0 && check.skipped === 0) && artifactSha256 === sha(readFileSync(archive))
+      && git(['rev-parse', 'HEAD']).toString().trim() === metadata.distributionCommit && git(['status', '--porcelain=v1', '--untracked-files=all']).length === 0,
     installedBindingQualified: false, nonClaims: ['This loader check does not qualify planning/execution endpoints, image startup, database migration or activation.'] };
   writeFileSync(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); return receipt;
 }

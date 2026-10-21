@@ -9,6 +9,7 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const git = args => execFileSync('git', ['-C', root, ...args], { windowsHide: true });
 const sourcePrefix = 'extensions/cityos-adapter/';
 export function packCityosAdapter() {
+  if (process.versions.node.split('.')[0] !== readFileSync(join(root, '.nvmrc'), 'utf8').trim()) throw Error('Select the owning Paperclip Node major before packing');
   if (git(['status', '--porcelain=v1', '--untracked-files=all']).length) throw Error('Commit the scoped adapter source before packing; do not include unrelated work');
   const distributionCommit = git(['rev-parse', 'HEAD']).toString().trim();
   const integration = JSON.parse(git(['show', `${distributionCommit}:config/upstream/integration.json`]));
