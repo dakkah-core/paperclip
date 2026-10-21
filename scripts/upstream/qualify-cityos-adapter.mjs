@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,6 +51,17 @@ export async function qualifyCityosAdapter(archive) {
   const requireServer = createRequire(join(root, 'server/package.json'));
   let tsx;
   try { tsx = requireServer.resolve('tsx/cli'); } catch { throw Error('Install the selected Paperclip server dependencies before real-loader qualification; this check cannot skip or substitute them'); }
+  let peerRoot = dirname(requireServer.resolve('@paperclipai/adapter-utils'));
+  while (!existsSync(join(peerRoot, 'package.json')) || JSON.parse(readFileSync(join(peerRoot, 'package.json'), 'utf8')).name !== '@paperclipai/adapter-utils') {
+    const parent = dirname(peerRoot); if (parent === peerRoot) throw Error('Installed adapter-utils peer owner missing'); peerRoot = parent;
+  }
+  if (JSON.parse(readFileSync(join(peerRoot, 'package.json'), 'utf8')).version !== utilities.version) throw Error('Installed adapter-utils peer version differs');
+  mkdirSync(join(packageRoot, 'node_modules/@paperclipai'), { recursive: true });
+  symlinkSync(realpathSync(peerRoot), join(packageRoot, 'node_modules/@paperclipai/adapter-utils'), process.platform === 'win32' ? 'junction' : 'dir');
+  const typeFixture = git(['show', `${metadata.distributionCommit}:extensions/cityos-adapter/client-types.fixture.mts`]);
+  const typeFixturePath = join(output, 'client-types.fixture.mts'); writeFileSync(typeFixturePath, typeFixture);
+  const compiler = join(root, 'server/node_modules/typescript/bin/tsc');
+  if (!existsSync(compiler)) throw Error('Install the pinned Paperclip TypeScript compiler before packed type qualification');
   const tests = git(['show', `${metadata.distributionCommit}:extensions/cityos-adapter/adapter.test.mjs`]).toString('utf8');
   const testPath = join(output, 'adapter.test.mjs');
   const fixture = tests.replace("from './index.mjs'", "from './package/index.mjs'").replace("from './ui-parser.mjs'", "from './package/ui-parser.mjs'");
@@ -59,6 +70,7 @@ export async function qualifyCityosAdapter(archive) {
   for (const [name, args] of [
     ['packed-boundary-behavior', ['--test', '--test-reporter=tap', testPath]],
     ['real-external-loader', [tsx, join(root, 'extensions/cityos-adapter/qualify-loader.ts'), packageRoot]],
+    ['public-client-types', [compiler, '--ignoreConfig', '--strict', '--noEmit', '--skipLibCheck', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--target', 'ES2022', typeFixturePath]],
   ]) {
     const result = spawnSync(process.execPath, args, { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
     const logPath = join(output, name + '.log'); writeFileSync(logPath, (result.stdout ?? '') + (result.stderr ?? ''));
@@ -67,6 +79,8 @@ export async function qualifyCityosAdapter(archive) {
     if (name === 'packed-boundary-behavior') {
       const count = label => Number([...log.matchAll(new RegExp(`^# ${label} (\\d+)$`, 'gmu'))].at(-1)?.[1] ?? -1);
       passed = count('pass'); failed = count('fail'); skipped = count('skipped') + count('todo');
+    } else if (name === 'public-client-types') {
+      passed = result.status === 0 ? 1 : 0; failed = result.status === 0 ? 0 : 1; skipped = 0;
     } else {
       const report = log.split(/\r?\n/u).flatMap(line => { try { const value = JSON.parse(line); return value.schemaVersion === 'cityos.paperclip-real-loader-check.v1' ? [value] : []; } catch { return []; } }).at(-1);
       if (report) ({ passed, failed, skipped } = report);
@@ -74,7 +88,7 @@ export async function qualifyCityosAdapter(archive) {
     checks.push({ name, exitCode: result.status, passed, failed, skipped, logPath, logSha256: sha(readFileSync(logPath)) });
   }
   const receipt = { schemaVersion: 'cityos.paperclip-adapter-loader-qualification.v1', distributionCommit: metadata.distributionCommit,
-    artifact: { path: archive, sha256: artifactSha256 }, checks, fixtureSourceSha256: sha(Buffer.from(tests)), fixtureImportMappingSha256: sha(Buffer.from(fixture)),
+    artifact: { path: archive, sha256: artifactSha256 }, checks, fixtureSourceSha256: sha(Buffer.from(tests)), fixtureImportMappingSha256: sha(Buffer.from(fixture)), typeFixtureSha256: sha(typeFixture),
     success: checks.every(check => check.exitCode === 0 && check.passed > 0 && check.failed === 0 && check.skipped === 0) && artifactSha256 === sha(readFileSync(archive)),
     installedBindingQualified: false, nonClaims: ['This loader check does not qualify planning/execution endpoints, image startup, database migration or activation.'] };
   writeFileSync(join(output, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n'); return receipt;

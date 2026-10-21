@@ -13,12 +13,17 @@ export interface CityosAdapterExecutionView {
   state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'denied';
   receipt?: { receiptRef: string; state: 'completed' | 'failed' | 'cancelled' | 'denied'; usage: { inputTokens: number; outputTokens: number; cachedInputTokens?: number } };
 }
+export interface CityosAdapterExecutionIntent {
+  schemaVersion: 'cityos.paperclip-execution-intent.v1';
+  instanceRef: string; companyId: string; agentId: string; issueId: string;
+  bindingRef: string; workVersion: string; operationId: string; runId: string;
+}
 export interface CityosAdapterRuntime {
   tenantId: string; instanceRef: string; companyId: string; compatibility: typeof compatibility;
   isCurrent(): Promise<boolean>; executionQualified(): Promise<boolean>;
   resolveWork(input: { companyId: string; agentId: string; issueId: string }): Promise<CityosAdapterBinding | null>;
   client: {
-    submitExecution(intent: Record<string, string>): Promise<CityosAdapterExecutionView>;
+    submitExecution(intent: CityosAdapterExecutionIntent): Promise<CityosAdapterExecutionView>;
     readExecution(ref: string): Promise<CityosAdapterExecutionView>;
     cancelExecution(ref: string, operationId: string): Promise<CityosAdapterExecutionView>;
   };
