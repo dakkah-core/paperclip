@@ -27,6 +27,13 @@
   ],
   "changes": [
     {
+      "id": "migration-line-ending-history",
+      "purpose": "Recognize LF and CRLF materializations of published migrations when resolving stored history across platforms.",
+      "invariant": "Executed SQL, published migration files and existing journal rows remain unchanged. Substantive edits do not gain aliases; ambiguous hashes reject selection.",
+      "paths": ["packages/db/src/client.ts", "packages/db/src/migration-history-hashes.ts", "packages/db/src/migration-history-hashes.test.ts", "doc/DATABASE.md"],
+      "tests": ["packages/db/src/migration-history-hashes.test.ts", "scripts/upstream/qualify-database-upgrade.mjs"]
+    },
+    {
       "id": "fork-qualification",
       "purpose": "Add local evidence exclusion and an isolated source/adapter CI gate without modifying Paperclip core.",
       "invariant": "External adapter behavior remains outside core; source tests do not grant installed runtime or database qualification.",

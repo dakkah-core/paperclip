@@ -2,6 +2,11 @@
 
 Paperclip uses PostgreSQL via [Drizzle ORM](https://orm.drizzle.team/). There are three ways to run the database, from simplest to most production-ready.
 
+Migration-history lookup recognizes both LF and CRLF checkout materializations of
+the same published SQL. It preserves executed SQL and stored history hashes.
+Substantive SQL edits still need an explicit compatibility alias; ambiguous
+content hashes fail instead of selecting a migration by iteration order.
+
 ### Persistent case handoffs
 
 Standalone `cases` add a nullable unique `work_issue_id`, a descriptive `phase`,
