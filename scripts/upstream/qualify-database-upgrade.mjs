@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { disposablePostgresStartArguments } from './postgres-control.mjs';
+import { disposablePostgresStartArguments, disposableRestoreAclArguments } from './postgres-control.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 assert.equal(process.versions.node.split('.')[0], readFileSync(path.join(root, '.nvmrc'), 'utf8').trim());
@@ -146,6 +146,15 @@ try {
   const restored = owned('restored-data'); assert.equal(existsSync(restored), false);
   phase = 'cold-restore';
   cpSync(backup, restored, { recursive: true, force: false, errorOnExist: true }); assert.deepEqual(tree(restored), originalTree);
+  // A hosted Windows runner copies with its elevated token. Restore explicit
+  // access for the same user SID before pg_ctl restricts the child token; never
+  // change machine users, the original database, or a shared directory ACL.
+  const ownerSid = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    '[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value'], { windowsHide: true, encoding: 'utf8', timeout: 10000 }).trim();
+  const permissions = spawnSync('icacls.exe', disposableRestoreAclArguments({ directory: realpathSync(restored), output: realpathSync(output), ownerSid }),
+    { windowsHide: true, encoding: 'utf8', timeout: 15000 });
+  assert.equal(permissions.status, 0, 'Disposable restore owner access could not be established');
+  assert.deepEqual(tree(restored), originalTree, 'Restore access preparation changed backup bytes');
   const restoreAdmin = await start(restored, false), restoreUrl = new URL(restoreAdmin); restoreUrl.pathname = '/paperclip_fixture';
   sql = connect(restoreUrl.href, { max: 1, onnotice: () => {}, connect_timeout: 10 });
   assert.equal(await countMigrations(), beforeJournal.entries.length); assert.deepEqual(await company(), original);
