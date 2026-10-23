@@ -33,6 +33,7 @@ jobs:
             .build/upstream/paperclip-image-*/image.tar.gz
             .build/upstream/paperclip-image-*/base-build.log
             .build/upstream/paperclip-image-*/adapter-image-build.log
+            .build/upstream/paperclip-image-*/artifact-probe.log
   source:
     runs-on: ubuntu-latest
     steps:

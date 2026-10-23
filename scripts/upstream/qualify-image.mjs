@@ -16,6 +16,7 @@ const imageId = value => { assert.match(value, /^sha256:[a-f0-9]{64}$/u); return
 export function validateImageProbe(probe, expected) {
   assert.equal(probe?.schemaVersion, 'cityos.paperclip-image-probe.v1');
   for (const key of ['source', 'lockSha256', 'adapterSha256']) assert.equal(probe[key], expected[key], key);
+  assert.equal(probe.installedLockSha256, expected.lockSha256);
   assert.equal(probe.loader?.passed, 6); assert.equal(probe.loader.failed, 0); assert.equal(probe.loader.skipped, 0);
   assert.equal(probe.installedBindingQualified, false);
   assert.deepEqual(probe.assets?.map(asset => asset.path).sort(), ['server/dist-runtime/index.mjs', 'server/dist/build-info.json', 'ui/dist/index.html'].sort());
@@ -85,7 +86,8 @@ export async function qualifyImage() {
     assert.equal(inspected.Os, 'linux'); assert.equal(inspected.Config.Labels['org.opencontainers.image.revision'], source.sourceSha);
     assert.equal(inspected.Config.Labels['cityos.paperclip.adapter.sha256'], expected.adapterSha256);
     stage = 'artifact-probe';
-    const probeLines = docker(['run', '--rm', '--network', 'none', '--label', 'cityos.qualification=' + nonce, '--entrypoint', 'node', candidate, '/opt/cityos/paperclip-adapter/image-probe.mjs', source.sourceSha, expected.lockSha256]).split(/\r?\n/u);
+    await runLogged('artifact-probe', 'docker', ['run', '--rm', '--network', 'none', '--label', 'cityos.qualification=' + nonce, '--entrypoint', 'node', candidate, '/opt/cityos/paperclip-adapter/image-probe.mjs', source.sourceSha, expected.lockSha256]);
+    const probeLines = readFileSync(join(output, 'artifact-probe.log'), 'utf8').split(/\r?\n/u);
     const probes = probeLines.flatMap(line => { try { const item = JSON.parse(line); return item.schemaVersion === 'cityos.paperclip-image-probe.v1' ? [item] : []; } catch { return []; } });
     assert.equal(probes.length, 1); probe = probes[0]; validateImageProbe(probe, expected);
     stage = 'database-readiness';
