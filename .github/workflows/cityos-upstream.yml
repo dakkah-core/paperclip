@@ -20,7 +20,14 @@ jobs:
       - name: Verify declared changes and adapter boundary behavior
         run: |
           node --test scripts/upstream/*.test.mjs extensions/cityos-adapter/adapter.test.mjs
+          node scripts/upstream/verify-adapter-regressions.mjs
           node scripts/upstream/integration.mjs
+      - name: Retain the actual before and after regression receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-adapter-regression-${{ github.sha }}
+          path: .build/upstream/paperclip-regression-*/receipt.json
   windows-database-restore:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -77,6 +84,19 @@ jobs:
           $serverCheckExit = $LASTEXITCODE
           Pop-Location
           if ($serverCheckExit -ne 0) { exit $serverCheckExit }
+      - name: Pack and qualify the exact adapter through the real external loader
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm/node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/adapter-utils' build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $assemblyRaw = node scripts/upstream/pack-cityos-adapter.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $assembly = $assemblyRaw | ConvertFrom-Json
+          node scripts/upstream/qualify-cityos-adapter.mjs $assembly.artifact.path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Retain receipts and redacted failures only
         if: always()
         uses: actions/upload-artifact@v4
@@ -86,3 +106,6 @@ jobs:
             .build/upstream/database-upgrade-*/receipt.json
             .build/upstream/database-upgrade-*/failure.json
             .build/upstream/server-contracts.json
+            .build/upstream/paperclip-adapter-*/assembly.json
+            .build/upstream/paperclip-adapter-*/*.tgz
+            .build/upstream/paperclip-loader-*/receipt.json

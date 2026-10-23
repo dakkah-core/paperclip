@@ -87,3 +87,62 @@ test('the browser parser ignores oversized, malformed and arbitrary output', () 
   for (const line of ['bad', 'x'.repeat(8193), '{"message":"private credential"}', '{"schemaVersion":"cityos.paperclip-progress.v1","state":"completed"}']) assert.deepEqual(parseStdoutLine(line, 'now'), []);
   assert.deepEqual(parseStdoutLine('{"schemaVersion":"cityos.paperclip-progress.v1","state":"running","extra":"private"}', 'now'), [{ kind: 'system', ts: 'now', text: 'CityOS execution: running' }]);
 });
+
+test('ambiguous cancellation is replayed with the same identity until the owner confirms it', async () => {
+  const f = fixture(); let cancellations = 0, reads = 0;
+  f.runtime.client.submitExecution = async intent => { f.calls.push(['submit', intent]); f.controller.abort(); return f.view('running'); };
+  f.runtime.client.readExecution = async ref => {
+    f.calls.push(['read', ref]);
+    if (++reads === 1) throw Error('PAPERCLIP_ENGINEERING_HTTP_404');
+    return f.view('running');
+  };
+  f.runtime.client.cancelExecution = async (ref, operationId) => {
+    f.calls.push(['cancel', ref, operationId]);
+    if (++cancellations === 1) throw Error('ambiguous cancellation transport');
+    return f.view('cancelled');
+  };
+  const withdraw = installCityosAdapterRuntime(f.runtime);
+  try {
+    const result = await createServerAdapter().execute(context(f.controller.signal));
+    assert.equal(result.exitCode, 130); assert.equal(result.resultJson.receiptRef, 'receipt');
+    assert.deepEqual(f.calls.filter(call => call[0] === 'cancel'), [
+      ['cancel', 'execution', f.id + '-cancel'], ['cancel', 'execution', f.id + '-cancel'],
+    ]);
+    assert.equal(f.calls.filter(call => call[0] === 'submit').length, 1);
+  } finally { withdraw(); }
+});
+
+test('installed client methods cannot be replaced by mutating the bootstrap object', async () => {
+  const f = fixture(), withdraw = installCityosAdapterRuntime(f.runtime);
+  try {
+    f.runtime.client.submitExecution = async () => { throw Error('replacement submit'); };
+    f.runtime.client.readExecution = async () => { throw Error('replacement read'); };
+    const result = await createServerAdapter().execute(context());
+    assert.equal(result.exitCode, 0);
+    assert.deepEqual(f.calls.map(call => call[0]), ['read', 'submit', 'read']);
+  } finally { withdraw(); }
+});
+
+test('only literal owner acknowledgements qualify diagnostics or execution', async () => {
+  for (const name of ['isCurrent', 'executionQualified']) for (const value of [1, 'true', {}]) {
+    const f = fixture({ [name]: async () => value }), withdraw = installCityosAdapterRuntime(f.runtime);
+    try {
+      const adapter = createServerAdapter();
+      assert.equal((await adapter.testEnvironment({ companyId: 'company' })).status, 'fail');
+      assert.equal((await adapter.execute(context())).exitCode, null);
+      assert.equal(f.calls.filter(call => call[0] === 'submit').length, 0);
+    } finally { withdraw(); }
+  }
+});
+
+test('work coordinates are captured before a later asynchronous scope recheck', async () => {
+  const f = fixture(), original = { ...binding }; let checks = 0;
+  f.runtime.resolveWork = async () => original;
+  f.runtime.isCurrent = async () => { if (++checks === 2) original.workVersion = 'v2'; return true; };
+  const withdraw = installCityosAdapterRuntime(f.runtime);
+  try {
+    const result = await createServerAdapter().execute(context());
+    assert.equal(result.exitCode, 0);
+    assert.equal(f.calls.find(call => call[0] === 'submit')[1].workVersion, 'v1');
+  } finally { withdraw(); }
+});

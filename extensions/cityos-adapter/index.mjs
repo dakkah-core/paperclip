@@ -15,7 +15,12 @@ export function installCityosAdapterRuntime(runtime) {
     || typeof runtime.resolveWork !== 'function' || typeof runtime.isCurrent !== 'function' || typeof runtime.executionQualified !== 'function'
     || !runtime.client || ['submitExecution', 'readExecution', 'cancelExecution'].some(name => typeof runtime.client[name] !== 'function')
     || Object.entries(compatibility).some(([key, value]) => runtime.compatibility?.[key] !== value)) throw Error('Compatible CityOS runtime bindings are required');
-  installed = Object.freeze({ ...runtime });
+  installed = Object.freeze({ ...runtime,
+    resolveWork: runtime.resolveWork.bind(runtime), isCurrent: runtime.isCurrent.bind(runtime),
+    executionQualified: runtime.executionQualified.bind(runtime),
+    client: Object.freeze(Object.fromEntries(['submitExecution', 'readExecution', 'cancelExecution']
+      .map(name => [name, runtime.client[name].bind(runtime.client)]))),
+  });
   const captured = installed;
   return () => { if (installed === captured) installed = null; };
 }
@@ -46,7 +51,7 @@ export function createServerAdapter() {
     async testEnvironment(ctx) {
       const runtime = installed;
       let available = false;
-      try { available = Boolean(runtime && ctx.companyId === runtime.companyId && await runtime.isCurrent() && await runtime.executionQualified()); } catch { /* No credentials or source diagnostics escape. */ }
+      try { available = Boolean(runtime && ctx.companyId === runtime.companyId && await runtime.isCurrent() === true && await runtime.executionQualified() === true); } catch { /* No credentials or source diagnostics escape. */ }
       return { adapterType: type, testedAt: new Date().toISOString(), status: available ? 'pass' : 'fail', checks: [{
         code: available ? 'cityos_installed_binding_current' : 'cityos_installed_binding_unavailable', level: available ? 'info' : 'error',
         message: available ? 'Compatible CityOS execution binding is current.' : 'Install and qualify the CityOS planning and execution bindings before enabling this adapter.',
@@ -57,9 +62,9 @@ export function createServerAdapter() {
       if (!runtime || ctx.agent.companyId !== runtime.companyId || !reference(ctx.agent.id) || !reference(ctx.runId)
         || !reference(ctx.context.taskId)) return unavailable('CITYOS_VERIFIED_RUN_CONTEXT_REQUIRED');
       let binding, operationId, executionRef, cancelled = false;
-      const control = () => installed === runtime && runtime.isCurrent();
+      const control = async () => installed === runtime && await runtime.isCurrent() === true;
       try {
-        if (!await control() || !await runtime.executionQualified()) return unavailable('CITYOS_EXECUTION_NOT_QUALIFIED');
+        if (!await control() || await runtime.executionQualified() !== true) return unavailable('CITYOS_EXECUTION_NOT_QUALIFIED');
         await ctx.onCancellationReady?.();
         const coordinates = { instanceRef: runtime.instanceRef, companyId: ctx.agent.companyId, agentId: ctx.agent.id, runId: ctx.runId };
         operationId = operationIdFor(coordinates);
@@ -75,7 +80,7 @@ export function createServerAdapter() {
             || view.issueId !== ctx.context.taskId || view.runId !== ctx.runId || ![view.bindingRef, view.workRef, view.workVersion].every(reference)) return unavailable('CITYOS_ORIGINAL_RUN_BINDING_MISMATCH');
           binding = { ...view, tenantId: runtime.tenantId };
         } else {
-          binding = await runtime.resolveWork({ companyId: ctx.agent.companyId, agentId: ctx.agent.id, issueId: ctx.context.taskId });
+          binding = structuredClone(await runtime.resolveWork({ companyId: ctx.agent.companyId, agentId: ctx.agent.id, issueId: ctx.context.taskId }));
           if (!binding || binding.tenantId !== runtime.tenantId || binding.instanceRef !== runtime.instanceRef || binding.companyId !== ctx.agent.companyId
             || binding.agentId !== ctx.agent.id || binding.issueId !== ctx.context.taskId
             || ![binding.bindingRef, binding.workRef, binding.workVersion].every(reference)) return unavailable('CITYOS_WORK_BINDING_MISMATCH');
@@ -104,10 +109,10 @@ export function createServerAdapter() {
               summary: `CityOS execution ${view.state}.`, resultJson: { executionRef, operationId,
                 workRef: binding.workRef, workVersion: binding.workVersion, receiptRef: view.receipt.receiptRef } };
           }
-          if (ctx.signal?.aborted && !cancelled) {
+          if (ctx.signal?.aborted) {
             cancelled = true;
             try { view = await runtime.client.cancelExecution(executionRef, `${operationId}-cancel`); continue; }
-            catch { /* Cancellation acknowledgement is uncertain; inquire until a terminal owner receipt. */ }
+            catch { /* Inquire, then replay this same cancellation identity while nonterminal. */ }
           }
           await ctx.onLog('stdout', JSON.stringify({ schemaVersion: 'cityos.paperclip-progress.v1', state: view.state, executionRef }) + '\n');
           await (runtime.wait ?? wait)(interval);
