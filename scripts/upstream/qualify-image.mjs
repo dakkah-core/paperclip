@@ -21,6 +21,13 @@ export function validateImageProbe(probe, expected) {
   assert.deepEqual(probe.assets?.map(asset => asset.path).sort(), ['server/dist-runtime/index.mjs', 'server/dist/build-info.json', 'ui/dist/index.html'].sort());
   for (const asset of probe.assets) assert.match(asset.sha256, /^[a-f0-9]{64}$/u);
 }
+export function validateImageDerivation(base, candidate) {
+  imageId(base.Id); imageId(candidate.Id);
+  assert.equal(candidate.Os, base.Os); assert.equal(candidate.Architecture, base.Architecture);
+  assert.ok(base.RootFS?.Layers?.length > 0);
+  assert.deepEqual(candidate.RootFS?.Layers?.slice(0, base.RootFS.Layers.length), base.RootFS.Layers,
+    'The adapter image must derive from the exact built upstream image');
+}
 async function digestFile(file) { const hash = createHash('sha256'); for await (const bytes of createReadStream(file)) hash.update(bytes); return hash.digest('hex'); }
 async function logged(command, args, file, cwd = root) {
   const fd = openSync(file, 'w');
@@ -49,7 +56,8 @@ export async function qualifyImage() {
   const output = mkdtempSync(join(parent, 'paperclip-image-')), sealed = join(output, 'source'), layer = join(output, 'layer');
   mkdirSync(sealed); mkdirSync(layer);
   const nonce = 'cityos-paperclip-' + randomUUID(), owned = [];
-  let networkCreated = false, cleanupComplete = false, candidate, probe, health, failure;
+  let networkCreated = false, cleanupComplete = false, base, candidate, probe, health, failure, stage = 'source-archive';
+  const baseTag = nonce + ':base';
   const logs = [];
   const runLogged = async (name, command, args, cwd) => { const file = join(output, name + '.log'); logs.push(file); return logged(command, args, file, cwd); };
   try {
@@ -61,22 +69,33 @@ export async function qualifyImage() {
     copyFileSync(assembly.artifact.path, join(layer, 'adapter.tgz'));
     writeFileSync(join(layer, 'assembly.json'), JSON.stringify(assembly));
     for (const file of ['Dockerfile', 'image-probe.mjs']) copyFileSync(join(sealed, 'extensions/cityos-adapter', file), join(layer, file));
+    stage = 'base-build';
     await runLogged('base-build', 'docker', ['build', '--target', 'production', '--build-arg', 'PAPERCLIP_BUILD_COMMIT=' + source.sourceSha, '--label', 'org.opencontainers.image.revision=' + source.sourceSha, '--iidfile', join(output, 'base.iid'), sealed]);
-    const base = imageId(readFileSync(join(output, 'base.iid'), 'utf8').trim());
-    await runLogged('adapter-image-build', 'docker', ['build', '--build-arg', 'PAPERCLIP_BASE_IMAGE=' + base, '--label', 'org.opencontainers.image.revision=' + source.sourceSha, '--label', 'cityos.paperclip.adapter.sha256=' + expected.adapterSha256, '--iidfile', join(output, 'candidate.iid'), layer]);
+    base = imageId(readFileSync(join(output, 'base.iid'), 'utf8').trim());
+    // Dockerfile FROM interprets a bare sha256 ID as a registry name. Give the
+    // exact local image a run-owned tag, then verify both the tag and layer ancestry.
+    docker(['image', 'tag', base, baseTag]);
+    assert.equal(JSON.parse(docker(['image', 'inspect', baseTag]))[0].Id, base);
+    stage = 'adapter-image-build';
+    await runLogged('adapter-image-build', 'docker', ['build', '--build-arg', 'PAPERCLIP_BASE_IMAGE=' + baseTag, '--label', 'org.opencontainers.image.revision=' + source.sourceSha, '--label', 'cityos.paperclip.adapter.sha256=' + expected.adapterSha256, '--iidfile', join(output, 'candidate.iid'), layer]);
     candidate = imageId(readFileSync(join(output, 'candidate.iid'), 'utf8').trim());
     const inspected = JSON.parse(docker(['image', 'inspect', candidate]))[0];
+    assert.equal(JSON.parse(docker(['image', 'inspect', baseTag]))[0].Id, base);
+    validateImageDerivation(JSON.parse(docker(['image', 'inspect', base]))[0], inspected);
     assert.equal(inspected.Os, 'linux'); assert.equal(inspected.Config.Labels['org.opencontainers.image.revision'], source.sourceSha);
     assert.equal(inspected.Config.Labels['cityos.paperclip.adapter.sha256'], expected.adapterSha256);
+    stage = 'artifact-probe';
     const probeLines = docker(['run', '--rm', '--network', 'none', '--label', 'cityos.qualification=' + nonce, '--entrypoint', 'node', candidate, '/opt/cityos/paperclip-adapter/image-probe.mjs', source.sourceSha, expected.lockSha256]).split(/\r?\n/u);
     const probes = probeLines.flatMap(line => { try { const item = JSON.parse(line); return item.schemaVersion === 'cityos.paperclip-image-probe.v1' ? [item] : []; } catch { return []; } });
     assert.equal(probes.length, 1); probe = probes[0]; validateImageProbe(probe, expected);
+    stage = 'database-readiness';
     docker(['network', 'create', '--internal', '--label', 'cityos.qualification=' + nonce, nonce]); networkCreated = true;
     docker(['pull', 'postgres:18.1-trixie']);
     const databaseImage = imageId(JSON.parse(docker(['image', 'inspect', 'postgres:18.1-trixie']))[0].Id);
     const database = nonce + '-db'; owned.push(database);
     docker(['run', '-d', '--name', database, '--network', nonce, '--network-alias', 'database', '--label', 'cityos.qualification=' + nonce, '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', '-e', 'POSTGRES_DB=qualification', databaseImage]);
     await eventually(() => docker(['exec', database, 'pg_isready', '-U', 'postgres', '-d', 'qualification']));
+    stage = 'server-startup';
     const server = nonce + '-server'; owned.push(server);
     docker(['run', '-d', '--name', server, '--network', nonce, '--label', 'cityos.qualification=' + nonce,
       '-e', 'HOST=127.0.0.1', '-e', 'PAPERCLIP_DEPLOYMENT_MODE=local_trusted', '-e', 'PAPERCLIP_DEPLOYMENT_EXPOSURE=private',
@@ -87,6 +106,7 @@ export async function qualifyImage() {
     });
     await runLogged('runtime-logs', 'docker', ['logs', server]);
     // Save this exact tested image. A future publication must import it, not rebuild it.
+    stage = 'image-export';
     const saved = join(output, 'image.tar.gz'), saveLog = join(output, 'save.log'), fd = openSync(saveLog, 'w'); logs.push(saveLog);
     try {
       const child = spawn('docker', ['image', 'save', candidate], { stdio: ['ignore', 'pipe', fd] });
@@ -95,6 +115,7 @@ export async function qualifyImage() {
       for (const item of results) if (item.status === 'rejected') throw item.reason;
     } finally { closeSync(fd); }
     expected.savedImageSha256 = await digestFile(saved);
+    stage = 'source-recheck';
     assert.deepEqual(captureSourceIdentity(root), { sourceSha: source.sourceSha, sourceDigest: source.sourceDigest, dirty: false });
   } catch (error) { failure = error; }
   finally {
@@ -106,11 +127,12 @@ export async function qualifyImage() {
       } catch (error) { failures.push(error); }
     }
     if (networkCreated) try { docker(['network', 'rm', nonce]); } catch (error) { failures.push(error); }
+    if (base) try { assert.equal(JSON.parse(docker(['image', 'inspect', baseTag]))[0].Id, base); docker(['image', 'rm', baseTag]); } catch (error) { failures.push(error); }
     try { assert.equal(docker(['ps', '-aq', '--filter', 'label=cityos.qualification=' + nonce]), ''); assert.equal(docker(['network', 'ls', '-q', '--filter', 'label=cityos.qualification=' + nonce]), ''); } catch (error) { failures.push(error); }
     cleanupComplete = failures.length === 0;
     if (!cleanupComplete && !failure) failure = Error('Disposable image resources were not fully removed');
   }
-  const receipt = { schemaVersion: 'cityos.paperclip-image-qualification.v1', recordedAt: new Date().toISOString(), source, expected, imageId: candidate, probe, health,
+  const receipt = { schemaVersion: 'cityos.paperclip-image-qualification.v1', recordedAt: new Date().toISOString(), source, expected, baseImageId: base, imageId: candidate, stage, probe, health,
     logs: await Promise.all(logs.map(async path => ({ name: path.split('/').at(-1), sha256: await digestFile(path) }))), cleanupComplete,
     success: !failure && cleanupComplete, error: failure ? 'Image qualification failed; retained logs identify the exact stage' : undefined,
     installedBindingQualified: false, planningQualified: false, executionQualified: false, registryPublicationQualified: false, activationQualified: false };

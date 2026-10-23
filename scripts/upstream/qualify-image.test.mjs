@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { validateImageProbe } from './qualify-image.mjs';
+import { validateImageProbe, validateImageDerivation } from './qualify-image.mjs';
+
+test('a run-owned Docker tag cannot substitute different base image layers or platform', () => {
+  const base = { Id: 'sha256:' + 'a'.repeat(64), Os: 'linux', Architecture: 'amd64', RootFS: { Layers: ['layer-a', 'layer-b'] } };
+  const good = { ...base, Id: 'sha256:' + 'b'.repeat(64), RootFS: { Layers: [...base.RootFS.Layers, 'adapter-layer'] } };
+  assert.doesNotThrow(() => validateImageDerivation(base, good));
+  for (const edit of [{ RootFS: { Layers: ['other-base', 'adapter-layer'] } }, { Architecture: 'arm64' }, { Id: 'latest' }]) {
+    assert.throws(() => validateImageDerivation(base, { ...good, ...edit }));
+  }
+});
 
 test('image qualification refuses stale source, altered payload, changed dependencies and incomplete loader checks', () => {
   const expected = { source: 'a'.repeat(40), lockSha256: 'b'.repeat(64), adapterSha256: 'c'.repeat(64) };

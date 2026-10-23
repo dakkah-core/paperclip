@@ -15,6 +15,8 @@ assert.match(source ?? '', /^[a-f0-9]{40}$/u);
 assert.equal(assembly.distributionCommit, source);
 assert.equal(sha(readFileSync(join(root, 'adapter.tgz'))), assembly.artifact.sha256);
 const manifest = json(join(root, 'package/package.json'));
+const { cityosArtifact, ...publicManifest } = manifest;
+assert.deepEqual(publicManifest, json('/app/extensions/cityos-adapter/package.json'));
 assert.equal(manifest.cityosArtifact.distributionCommit, source);
 assert.deepEqual(manifest.cityosArtifact.sourceInputs, assembly.sourceInputs);
 assert.equal(sha(readFileSync('/app/pnpm-lock.yaml')), lockSha256, 'image cannot silently resolve a different lock');
