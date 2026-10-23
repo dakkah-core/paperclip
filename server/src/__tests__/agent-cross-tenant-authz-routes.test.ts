@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.unmock("http");
 vi.unmock("node:http");
@@ -344,6 +344,14 @@ function resetMockDefaults() {
   mockHeartbeatService.cancelActiveForAgent.mockImplementation(async () => undefined);
   mockLogActivity.mockImplementation(async () => undefined);
 }
+
+// Import the real route graph before any case owns mutable fixture grants.
+// A cold Windows transform can outlive the first case's timeout; its unfinished
+// requests would otherwise continue while later cases reset those same grants.
+beforeAll(async () => {
+  resetMockDefaults();
+  await loadRouteModules();
+}, 180_000);
 
 describe("agent cross-tenant route authorization", () => {
   beforeEach(() => {

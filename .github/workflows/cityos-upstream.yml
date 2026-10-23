@@ -23,7 +23,7 @@ jobs:
           node scripts/upstream/integration.mjs
   windows-database-restore:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +62,21 @@ jobs:
           . ./scripts/upstream/select-node.ps1
           node scripts/upstream/qualify-database-upgrade.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify upstream authentication, company boundaries, adapters and startup refusals
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm/node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/server...' install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/ensure-plugin-build-deps.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location server
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/authz-company-access.test.ts src/__tests__/agent-auth-jwt.test.ts src/__tests__/agent-auth-middleware.test.ts src/__tests__/agent-run-authentication.test.ts src/__tests__/agent-cross-tenant-authz-routes.test.ts src/__tests__/adapter-registry.test.ts src/__tests__/adapter-routes-authz.test.ts src/__tests__/startup-refusals.test.ts --maxWorkers 1 --no-file-parallelism --reporter default --reporter json --outputFile.json ../.build/upstream/server-contracts.json
+          $serverCheckExit = $LASTEXITCODE
+          Pop-Location
+          if ($serverCheckExit -ne 0) { exit $serverCheckExit }
       - name: Retain receipts and redacted failures only
         if: always()
         uses: actions/upload-artifact@v4
@@ -70,3 +85,4 @@ jobs:
           path: |
             .build/upstream/database-upgrade-*/receipt.json
             .build/upstream/database-upgrade-*/failure.json
+            .build/upstream/server-contracts.json
