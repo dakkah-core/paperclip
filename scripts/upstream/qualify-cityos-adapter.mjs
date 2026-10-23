@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlink
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { owningNpm } from './owning-npm.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -19,7 +20,7 @@ export async function qualifyCityosAdapter(archive) {
   const output = mkdtempSync(join(parent, 'paperclip-loader-')), packageRoot = join(output, 'package'); mkdirSync(packageRoot);
   // Use the selected Node distribution's own npm archive reader. No ambient
   // package install, CLI adapter or replacement loader is permitted here.
-  const npmRequire = createRequire(join(dirname(process.execPath), 'node_modules/npm/package.json'));
+  const npmRequire = createRequire(owningNpm());
   const allowed = new Set(['index.mjs', 'index.d.mts', 'ui-parser.mjs', 'README.md', 'package.json']);
   await npmRequire('tar').x({ file: archive, cwd: packageRoot, strip: 1, strict: true, preservePaths: false,
     filter(path, entry) {

@@ -1,8 +1,9 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { owningNpm } from './owning-npm.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -28,8 +29,7 @@ export function packCityosAdapter() {
   const manifest = JSON.parse(manifestBytes);
   manifest.cityosArtifact = { distributionCommit, sourceInputs: inputs, upstream: integration.upstream };
   writeFileSync(join(stage, 'package.json'), JSON.stringify(manifest, null, 2) + '\n');
-  const npm = join(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
-  if (!existsSync(npm)) throw Error('Selected Node distribution must include its npm pack tool');
+  const npm = owningNpm();
   const packed = spawnSync(process.execPath, [npm, 'pack', stage, '--ignore-scripts', '--json', '--pack-destination', output], { cwd: root, encoding: 'utf8', windowsHide: true });
   writeFileSync(join(output, 'pack.log'), (packed.stdout ?? '') + (packed.stderr ?? ''));
   if (packed.status !== 0) throw Error('Adapter pack failed; inspect the local pack log');

@@ -7,6 +7,32 @@ on:
 permissions:
   contents: read
 jobs:
+  linux-image:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Build once and qualify the exact image with the real loader and disposable database
+        run: node scripts/upstream/qualify-image.mjs
+      - name: Retain the tested image and its receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-linux-image-${{ github.sha }}
+          compression-level: 0
+          retention-days: 7
+          path: |
+            .build/upstream/paperclip-image-*/receipt.json
+            .build/upstream/paperclip-image-*/image.tar.gz
+            .build/upstream/paperclip-image-*/base-build.log
+            .build/upstream/paperclip-image-*/adapter-image-build.log
   source:
     runs-on: ubuntu-latest
     steps:
