@@ -1,0 +1,187 @@
+name: CityOS upstream boundary and external adapter
+on:
+  pull_request:
+  push:
+    branches: [master, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-image:
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Build once and qualify the exact image with the real loader and disposable database
+        run: node scripts/upstream/qualify-image.mjs
+      - name: Retain the tested image and its receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-linux-image-${{ github.sha }}
+          compression-level: 0
+          retention-days: 7
+          path: |
+            .build/upstream/paperclip-image-*/receipt.json
+            .build/upstream/paperclip-image-*/image.tar.gz
+            .build/upstream/paperclip-image-*/base-build.log
+            .build/upstream/paperclip-image-*/adapter-image-build.log
+            .build/upstream/paperclip-image-*/artifact-probe.log
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Verify declared changes and adapter boundary behavior
+        run: |
+          node --test scripts/upstream/*.test.mjs extensions/cityos-adapter/adapter.test.mjs
+          node scripts/upstream/verify-adapter-regressions.mjs
+          node scripts/upstream/integration.mjs
+      - name: Retain the actual before and after regression receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-adapter-regression-${{ github.sha }}
+          path: .build/upstream/paperclip-regression-*/receipt.json
+  windows-database-restore:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install the exact owning package manager and database dependency closure
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          $manager = (Get-Content package.json -Raw | ConvertFrom-Json).packageManager
+          if ($manager -notmatch '^pnpm@(\d+\.\d+\.\d+)$') { throw 'Exact owning pnpm version required' }
+          $managerVersion = $Matches[1]
+          $managerRoot = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm'
+          $npmCli = Join-Path (Split-Path $env:PAPERCLIP_NODE_EXECUTABLE) 'node_modules/npm/bin/npm-cli.js'
+          node $npmCli install --prefix $managerRoot --ignore-scripts --no-audit --no-fund "pnpm@$managerVersion"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $managerRoot 'node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/db...' install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check migration history identity
+        shell: pwsh
+        working-directory: packages/db
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ../../scripts/upstream/select-node.ps1
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts src/migration-history-hashes.test.ts --maxWorkers 1 --no-file-parallelism
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Rehearse the actual schema upgrade and stopped-cluster restore
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          node scripts/upstream/qualify-database-upgrade.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Qualify upstream authentication, company boundaries, adapters and startup refusals
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm/node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/server...' install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/ensure-plugin-build-deps.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location server
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/authz-company-access.test.ts src/__tests__/agent-auth-jwt.test.ts src/__tests__/agent-auth-middleware.test.ts src/__tests__/agent-cross-tenant-authz-routes.test.ts src/__tests__/adapter-registry.test.ts src/__tests__/adapter-routes-authz.test.ts src/__tests__/startup-refusals.test.ts --maxWorkers 1 --no-file-parallelism --reporter default --reporter json --outputFile.json ../.build/upstream/server-contracts.json
+          $serverCheckExit = $LASTEXITCODE
+          Pop-Location
+          if ($serverCheckExit -ne 0) { exit $serverCheckExit }
+          node scripts/upstream/server-contract-receipt.mjs .build/upstream/server-contracts.json windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Pack and qualify the exact adapter through the real external loader
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node.exe).Source
+          . ./scripts/upstream/select-node.ps1
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm/node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/adapter-utils' build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $assemblyRaw = node scripts/upstream/pack-cityos-adapter.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $assembly = $assemblyRaw | ConvertFrom-Json
+          node scripts/upstream/qualify-cityos-adapter.mjs $assembly.artifact.path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain receipts and redacted failures only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-windows-database-${{ github.sha }}
+          path: |
+            .build/upstream/database-upgrade-*/receipt.json
+            .build/upstream/database-upgrade-*/failure.json
+            .build/upstream/server-contracts.json
+            .build/upstream/paperclip-adapter-*/assembly.json
+            .build/upstream/paperclip-adapter-*/*.tgz
+            .build/upstream/paperclip-loader-*/receipt.json
+  linux-server-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      - name: Install exact owning server dependency closure
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node).Source
+          . ./scripts/upstream/select-node.ps1
+          $manager = (Get-Content package.json -Raw | ConvertFrom-Json).packageManager
+          if ($manager -notmatch '^pnpm@(\d+\.\d+\.\d+)$') { throw 'Exact owning pnpm version required' }
+          $managerVersion = $Matches[1]
+          $managerRoot = Join-Path $env:RUNNER_TEMP 'paperclip-pinned-pnpm'
+          $npmCli = Join-Path (Split-Path $env:PAPERCLIP_NODE_EXECUTABLE) '../lib/node_modules/npm/bin/npm-cli.js'
+          node $npmCli install --prefix $managerRoot --ignore-scripts --no-audit --no-fund "pnpm@$managerVersion"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:PAPERCLIP_PNPM_CLI = Join-Path $managerRoot 'node_modules/pnpm/bin/pnpm.cjs'
+          node scripts/upstream/run-pinned-pnpm.mjs --filter '@paperclipai/server...' install --frozen-lockfile --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Execute every required server case with real embedded PostgreSQL
+        shell: pwsh
+        run: |
+          $env:PAPERCLIP_NODE_EXECUTABLE = (Get-Command node).Source
+          . ./scripts/upstream/select-node.ps1
+          node scripts/ensure-plugin-build-deps.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force .build/upstream | Out-Null
+          Push-Location server
+          node node_modules/vitest/vitest.mjs run --config vitest.config.ts src/__tests__/authz-company-access.test.ts src/__tests__/agent-auth-jwt.test.ts src/__tests__/agent-auth-middleware.test.ts src/__tests__/agent-run-authentication.test.ts src/__tests__/agent-cross-tenant-authz-routes.test.ts src/__tests__/adapter-registry.test.ts src/__tests__/adapter-routes-authz.test.ts src/__tests__/startup-refusals.test.ts --maxWorkers 1 --no-file-parallelism --reporter default --reporter json --outputFile.json ../.build/upstream/linux-server-contracts.json
+          $serverCheckExit = $LASTEXITCODE
+          Pop-Location
+          if ($serverCheckExit -ne 0) { exit $serverCheckExit }
+          node scripts/upstream/server-contract-receipt.mjs .build/upstream/linux-server-contracts.json linux
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain actual Linux server results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paperclip-linux-server-${{ github.sha }}
+          path: .build/upstream/linux-server-contracts.json

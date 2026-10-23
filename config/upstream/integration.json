@@ -1,0 +1,74 @@
+{
+  "schemaVersion": "cityos.upstream-integration.v1",
+  "upstream": {
+    "repository": "https://github.com/paperclipai/paperclip",
+    "branch": "master",
+    "commit": "6dda8cc2b75e211dc62af264bfd0994f602099d1"
+  },
+  "baselineForkCommit": "3ff636bc4852dfc07fcab8ccfdb0b4fd22c1548c",
+  "ownedDirectories": [
+    "extensions/cityos-adapter",
+    "config/upstream",
+    "scripts/upstream"
+  ],
+  "publicEntries": [
+    "@cityos-core/paperclip-adapter",
+    "@cityos-core/paperclip-adapter/ui-parser"
+  ],
+  "toolchain": "package.json#engines;package.json#packageManager;.nvmrc;scripts/check-node-version-policy.mjs",
+  "consumerProvenance": "dakkah-cityos-cms/packages/engineering-paperclip-adapter-node",
+  "requiredChecks": [
+    "source-boundary",
+    "packed-loader",
+    "planning-http",
+    "execution-http",
+    "image-startup",
+    "database-restore"
+  ],
+  "changes": [
+    {
+      "id": "cross-company-test-preload",
+      "purpose": "Load the real agent route graph before cases mutate shared fixture grants, preventing cold Windows imports from leaking a timed-out case into later authorization checks.",
+      "invariant": "Original authorization assertions, routes, grants and real loopback HTTP requests remain unchanged; a failed import fails the suite before any case runs.",
+      "paths": ["server/src/__tests__/agent-cross-tenant-authz-routes.test.ts"],
+      "tests": ["server/src/__tests__/agent-cross-tenant-authz-routes.test.ts"]
+    },
+    {
+      "id": "migration-line-ending-history",
+      "purpose": "Recognize LF and CRLF materializations of published migrations when resolving stored history across platforms.",
+      "invariant": "Executed SQL, published migration files and existing journal rows remain unchanged. Substantive edits do not gain aliases; ambiguous hashes reject selection.",
+      "paths": ["packages/db/src/client.ts", "packages/db/src/migration-history-hashes.ts", "packages/db/src/migration-history-hashes.test.ts", "doc/DATABASE.md"],
+      "tests": ["packages/db/src/migration-history-hashes.test.ts", "scripts/upstream/qualify-database-upgrade.mjs"]
+    },
+    {
+      "id": "fork-qualification",
+      "purpose": "Add local evidence exclusion, source/adapter checks, disposable database upgrade/restore and upstream auth/company/adapter/startup CI checks.",
+      "invariant": "External adapter behavior remains outside core; source tests do not grant installed runtime or database qualification.",
+      "paths": [
+        ".gitignore",
+        ".github/workflows/cityos-upstream.yml"
+      ],
+      "tests": [
+        "extensions/cityos-adapter/adapter.test.mjs",
+        "scripts/upstream/integration.test.mjs",
+        "scripts/upstream/qualify-database-upgrade.mjs",
+        "server/src/__tests__/agent-cross-tenant-authz-routes.test.ts"
+      ]
+    },
+    {
+      "id": "node-policy-portability",
+      "purpose": "Normalize repository-relative paths before matching the existing release-runner Node exception on Windows.",
+      "invariant": "The declared Node policy is identical on Windows and POSIX; no runtime version requirement is changed.",
+      "paths": [
+        "scripts/check-node-version-policy.mjs"
+      ],
+      "tests": [
+        "scripts/upstream/node-policy-platform.test.mjs"
+      ]
+    }
+  ],
+  "nonClaims": [
+    "Local port-level tests do not qualify the actual external loader, company isolation, installed CityOS endpoints, image or database upgrade.",
+    "Execution requires separately installed planning and execution qualification; no Paperclip approval or budget grants CityOS authority."
+  ]
+}

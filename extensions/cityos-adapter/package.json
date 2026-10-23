@@ -1,0 +1,38 @@
+{
+  "name": "@cityos-core/paperclip-adapter",
+  "version": "0.1.0-cityos.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./index.d.mts",
+      "import": "./index.mjs"
+    },
+    "./ui-parser": "./ui-parser.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "index.d.mts",
+    "ui-parser.mjs",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@paperclipai/adapter-utils": "0.3.1",
+    "@paperclipai/server": "0.3.1"
+  },
+  "peerDependenciesMeta": {
+    "@paperclipai/adapter-utils": { "optional": true },
+    "@paperclipai/server": { "optional": true }
+  },
+  "paperclip": {
+    "adapterUiParser": "1.0.0",
+    "hostSource": "6dda8cc2b75e211dc62af264bfd0994f602099d1",
+    "cityosContract": "cityos.paperclip-integration.v1"
+  },
+  "scripts": {
+    "test": "node --test adapter.test.mjs"
+  },
+  "engines": {
+    "node": ">=24.11.0"
+  }
+}

@@ -182,11 +182,17 @@ export interface SandboxProviderCapabilities {
    * key denies the capability, so the provider keeps the file bridge. Only a
    * provider that declares this key `true` and whose worker verifies the duplex
    * open method selects the duplex channel path.
+   *
+   * HTTP/2 is the preferred transport. `queue_v1` is the soft-deprecated fallback.
    */
   duplexCommandStream?: boolean;
+  /** Provider can expose runnerd through a private authenticated WebSocket ingress. */
+  runnerWebSocketIngress?: boolean;
 }
 
 export interface PluginEnvironmentDriverDeclaration {
+  /** Provides Runner execution, resource preparation, and PRP connections via environmentTask. */
+  supportsTasks?: boolean;
   /** Stable driver key, unique within the plugin. Namespaced by plugin ID at runtime. */
   driverKey: string;
   /**
@@ -201,6 +207,13 @@ export interface PluginEnvironmentDriverDeclaration {
   displayName: string;
   /** Optional description for operator-facing docs or UI affordances. */
   description?: string;
+  /**
+   * Default provider budget for a fresh lease acquisition, in milliseconds.
+   * The host adds RPC overhead. A valid explicit config.timeoutMs overrides
+   * this default; bridgeRequestTimeoutMs can extend the resulting budget.
+   * Omit to retain the worker's normal RPC timeout. This is not lease lifetime.
+   */
+  defaultAcquireTimeoutMs?: number;
   /**
    * Sandbox providers must opt in before the host retains and resumes provider
    * leases across runs. Providers without this flag keep per-run acquire/release
@@ -597,13 +610,16 @@ export interface PluginDatabaseDeclaration {
 export type PluginApiRouteCompanyResolution =
   | { from: "body"; key: string }
   | { from: "query"; key: string }
-  | { from: "issue"; param: string };
+  | { from: "issue"; param: string }
+  | { from: "agent"; param: string };
 
 export interface PluginApiRouteDeclaration {
   /** Stable plugin-defined route key passed to the worker. */
   routeKey: string;
   /** HTTP method accepted by this route. */
   method: PluginApiRouteMethod;
+  /** Browser WebSocket upgrade, authorized through the ordinary HTTP middleware. */
+  transport?: "websocket";
   /** Plugin-local path under `/api/plugins/:pluginId/api`, e.g. `/issues/:issueId/smoke`. */
   path: string;
   /** Actor class allowed to call the route. */
@@ -676,6 +692,17 @@ export interface PaperclipPluginManifestV1 {
   minimumPaperclipVersion?: PluginMinimumHostVersion;
   /** Capabilities this plugin requires from the host. Enforced at runtime. */
   capabilities: PluginCapability[];
+  /** Required participant in agent preparation, stop, resume, and cleanup. */
+  agentLifecycle?: true;
+  /** Own project storage and durable workspace operations as one contract. */
+  workspaceProvider?: {
+    modes: Array<"shared_workspace" | "isolated_workspace" | "operator_branch">;
+    strategies: Array<"project_primary" | "git_worktree">;
+  };
+  /** Durable, acknowledged resource events delivered to onResourceLifecycle. Requires events.subscribe. */
+  resourceLifecycle?: Array<"agent" | "project" | "agent_runtime">;
+  /** Opt into the native pooled-connection catalog, setup, and management UI. */
+  aiConnectionRouter?: { name: string; description: string };
   /** Entrypoint paths relative to the package root. */
   entrypoints: {
     /** Path to the worker entrypoint (required). */

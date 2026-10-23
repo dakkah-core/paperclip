@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { withoutCleanupVerification } from "./cleanup-verification-proof.js";
 import { and, desc, eq, inArray, lte } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
 import {
@@ -22,6 +23,7 @@ import type {
   PluginEnvironmentCaptureTemplateResult,
   PluginEnvironmentInteractiveSetupConnectionPayload,
   PluginEnvironmentInteractiveSetupSession,
+  PluginEnvironmentLeaseObservation,
   PluginEnvironmentTemplateRefKind,
 } from "@paperclipai/plugin-sdk";
 import { conflict, notFound, unprocessable } from "../errors.js";
@@ -33,6 +35,9 @@ import {
 } from "./environment-config.js";
 import { secretService } from "./secrets.js";
 import {
+  INTERACTIVE_SETUP_WORKER_METHODS,
+  TEMPLATE_CAPTURE_WORKER_METHODS,
+  TEMPLATE_DELETE_WORKER_METHODS,
   resolvePluginExecuteRpcTimeoutMs,
   resolvePluginSandboxProviderDriverByKey,
 } from "./plugin-environment-driver.js";
@@ -164,7 +169,7 @@ function normalizeConnectionSummary(
 
 function normalizeProviderMetadata(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> | null {
   if (!metadata) return null;
-  return redactEnvironmentCustomImageValue(metadata);
+  return redactEnvironmentCustomImageValue(withoutCleanupVerification(metadata) ?? {});
 }
 
 function metadataRecord(metadata: Record<string, unknown> | null | undefined): Record<string, unknown> {
@@ -395,14 +400,33 @@ export function environmentCustomImageService(
     if (!resolved) {
       throw unprocessable(`Sandbox provider "${provider}" is not ready for customImage setup.`);
     }
+    // A manifest declaration is a claim. Read the live worker's verified
+    // methods once, so each gate below requires the declaration AND the
+    // matching method the worker really implements.
+    const workerMethods = new Set(options.pluginWorkerManager.getWorker(resolved.plugin.id)?.supportedMethods ?? []);
+    const requireWorkerMethods = (methods: readonly string[], capabilityLabel: string) => {
+      const missingMethod = methods.find((method) => !workerMethods.has(method));
+      if (missingMethod) {
+        throw unprocessable(
+          `Sandbox provider "${provider}" declares ${capabilityLabel} but its worker does not report the "${missingMethod}" method.`,
+        );
+      }
+    };
     if (!resolved.driver.supportsInteractiveSetup) {
       throw unprocessable(`Sandbox provider "${provider}" does not support interactive setup.`);
     }
-    if (input.requireCapture && !resolved.driver.supportsTemplateCapture) {
-      throw unprocessable(`Sandbox provider "${provider}" does not support template capture.`);
+    requireWorkerMethods(INTERACTIVE_SETUP_WORKER_METHODS, "interactive setup");
+    if (input.requireCapture) {
+      if (!resolved.driver.supportsTemplateCapture) {
+        throw unprocessable(`Sandbox provider "${provider}" does not support template capture.`);
+      }
+      requireWorkerMethods(TEMPLATE_CAPTURE_WORKER_METHODS, "template capture");
     }
-    if (input.requireDelete && !resolved.driver.supportsTemplateDelete) {
-      throw unprocessable(`Sandbox provider "${provider}" does not support template deletion.`);
+    if (input.requireDelete) {
+      if (!resolved.driver.supportsTemplateDelete) {
+        throw unprocessable(`Sandbox provider "${provider}" does not support template deletion.`);
+      }
+      requireWorkerMethods(TEMPLATE_DELETE_WORKER_METHODS, "template deletion");
     }
     return {
       provider,
@@ -625,7 +649,7 @@ export function environmentCustomImageService(
       return await markSessionStatus({
         sessionId: session.id,
         status,
-        metadata: cancelled.metadata,
+        metadata: mergeSetupSessionMetadata(session.metadata, cancelled.metadata),
         failureReason: status === "failed" ? "Provider failed to cancel setup session." : null,
       });
     } catch (error) {
@@ -737,6 +761,22 @@ export function environmentCustomImageService(
     }): Promise<EnvironmentCustomImageTemplate | null> => resolveActiveTemplate(db, input),
 
     getSessionById,
+
+    async inspectSetupResource(session: typeof environmentCustomImageSetupSessions.$inferSelect): Promise<PluginEnvironmentLeaseObservation | undefined> {
+      if (!session.providerLeaseId || !session.finishedAt || session.connectionSecretRef !== null ||
+          !["promoted", "cancelled", "timed_out", "failed"].includes(session.status)) return undefined;
+      const environment = await requireEnvironment(session.environmentId);
+      const provider = await resolveSetupProvider({ environment, storedProvider: session.provider,
+        storedRpcCompanyId: readSetupRpcCompanyId(session.metadata) });
+      const recordedFingerprint = readString(session.metadata?.[SOURCE_ENVIRONMENT_CONFIG_FINGERPRINT_METADATA_KEY]);
+      if (!recordedFingerprint || fingerprintEnvironmentSandboxProviderConfig(provider.runtimeConfig) !== recordedFingerprint) return undefined;
+      if (!options.pluginWorkerManager?.getWorker(provider.pluginId)?.supportedMethods?.includes("environmentInspectLease")) return undefined;
+      return await options.pluginWorkerManager.call(provider.pluginId, "environmentInspectLease", {
+        driverKey: provider.provider, companyId: provider.rpcCompanyId, environmentId: environment.id,
+        issueId: null, config: provider.driverConfig, providerLeaseId: session.providerLeaseId,
+        leaseMetadata: session.metadata ?? {},
+      }, 15_000);
+    },
 
     startSetupSession: async (input: {
       environmentId: string;
