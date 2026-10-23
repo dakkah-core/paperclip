@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { disposablePostgresStartArguments } from './postgres-control.mjs';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 assert.equal(process.versions.node.split('.')[0], readFileSync(path.join(root, '.nvmrc'), 'utf8').trim());
@@ -16,7 +17,7 @@ const sha = bytes => createHash('sha256').update(bytes).digest('hex');
 const git = args => execFileSync('git', args, { cwd: root, windowsHide: true, maxBuffer: 8 * 1024 * 1024 });
 function sourceInputs() {
   const files = new Set([...git(['ls-files', '-z', '--', 'packages/db/src']).toString().split('\0').filter(Boolean),
-    'packages/db/src/migration-history-hashes.ts', 'scripts/upstream/qualify-database-upgrade.mjs', 'pnpm-lock.yaml']);
+    'packages/db/src/migration-history-hashes.ts', 'scripts/upstream/qualify-database-upgrade.mjs', 'scripts/upstream/postgres-control.mjs', 'pnpm-lock.yaml']);
   return { commit: git(['rev-parse', 'HEAD']).toString().trim(), dirty: git(['status', '--porcelain']).length > 0,
     files: Object.fromEntries([...files].sort().map(ref => [ref, sha(readFileSync(path.join(root, ref)))])) };
 }
@@ -72,7 +73,13 @@ async function start(directory, initialize) {
     persistent: true, createPostgresUser: false, initdbFlags: ['--encoding=UTF8', '--locale=C', '--lc-messages=C'],
     postgresFlags: ['-h', '127.0.0.1'], onLog: log, onError: log });
   if (initialize) await instance.initialise();
-  await instance.start();
+  // pg_ctl's Windows implementation drops the administrative token when it
+  // starts postgres. Keep the same native bytes and disposable cluster owner.
+  const logFile = owned(path.basename(directory) + '-postgres.log');
+  const started = spawnSync(pgCtl, disposablePostgresStartArguments({ directory, port, logFile }),
+    { windowsHide: true, encoding: 'utf8', timeout: 20000 });
+  if (started.status !== 0 && existsSync(logFile)) log(readFileSync(logFile, 'utf8').slice(-16000));
+  assert.equal(started.status, 0, 'Owned PostgreSQL restricted-token startup did not complete');
   const pid = Number(readFileSync(path.join(directory, 'postmaster.pid'), 'utf8').split(/\r?\n/u)[0]);
   assert.ok(Number.isSafeInteger(pid) && pid > 0);
   const url = new URL(`postgresql://127.0.0.1:${port}/postgres`); url.username = user; url.password = password;
@@ -153,7 +160,7 @@ try {
     source: observedSource, sourceQualified: observedSource.dirty === false, lockSha256: sha(readFileSync(path.join(root, 'pnpm-lock.yaml'))),
     node: process.versions.node, postgresVersion: execFileSync(postgres, ['--version'], { windowsHide: true, encoding: 'utf8' }).trim(),
     postgresSha256: sha(readFileSync(postgres)), stages, success: true, passed: stages.length, failed: 0, skipped: 0,
-    backupMode: 'stopped-cluster-physical-copy-same-postgres-major', imageQualified: false, installationQualified: false, activationQualified: false,
+    backupMode: 'stopped-cluster-physical-copy-same-postgres-major', startupOwner: 'native-pg-ctl-restricted-child', imageQualified: false, installationQualified: false, activationQualified: false,
     nonClaims: ['Disposable schema and cold-restore evidence only; no existing database was opened or changed.',
       'This does not qualify a PostgreSQL major-version upgrade, server image, installed adapter binding or production rollback.'] }, null, 2) + '\n');
   console.log(JSON.stringify({ output, passed: stages.length, success: true }));
