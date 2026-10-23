@@ -2,7 +2,7 @@ name: CityOS upstream boundary and external adapter
 on:
   pull_request:
   push:
-    branches: [master]
+    branches: [master, 'codex/**']
   workflow_dispatch:
 permissions:
   contents: read
