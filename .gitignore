@@ -101,3 +101,6 @@ test-results/
 .ci-profile/
 # CityOS local upstream/artifact qualification.
 .build/
+
+# Local CityOS tooling state
+/.cityos/
