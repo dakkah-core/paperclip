@@ -2,3 +2,9 @@ dist
 node_modules
 .paperclip-sdk
 screenshots
+!tests/screenshots/
+tests/screenshots/*
+!tests/screenshots/capture.mjs
+!tests/screenshots/entry.tsx
+!tests/screenshots/harness.tsx
+!tests/screenshots/index.html
